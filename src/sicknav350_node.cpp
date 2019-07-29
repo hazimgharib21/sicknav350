@@ -104,7 +104,7 @@ void publish_scan(ros::Publisher *pub, double *range_values,
   scan_msg.intensities.resize(n_intensity_values);
   for (size_t i = 0; i < n_intensity_values; i++)
   {
-    scan_msg.intensities[i] = 0;//(float)intensity_values[i];
+    scan_msg.intensities[i] = (float)intensity_values[i];
   }
   pub->publish(scan_msg);
 
@@ -181,7 +181,8 @@ int main(int argc, char *argv[])
     {
       sick_nav350.SetOperatingMode((int)OperatingModes::STANDBY);
       sick_nav350.SetCurrentLayer(1);
-      sick_nav350.SetPoseDataFormat(1, 0);
+      sick_nav350.SetPoseDataFormat(1, 1);
+      sick_nav350.SetScanDataFormat(1, 1);
       sick_nav350.SetReflectorWindow(500, 500, 500, 70000);
       sick_nav350.SetActionRadius(400, 70000);
       sick_nav350.SetReflectorSize(80);
@@ -204,7 +205,7 @@ int main(int argc, char *argv[])
     {
       /* Get the scan and landmark measurements */
       sick_nav350.GetDataNavigation(1, 2);
-      sick_nav350.GetSickMeasurements(range_values,
+      sick_nav350.GetSickMeasurementsWithRemission(range_values,intensity_values,
                                       &num_measurements,
                                       &sector_step_angle,
                                       &sector_start_angle,
