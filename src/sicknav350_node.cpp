@@ -15,20 +15,58 @@
 #include "ros/ros.h"
 #include "sensor_msgs/LaserScan.h"
 #include <deque>
-#include <tf/transform_broadcaster.h>
 #include <nav_msgs/Odometry.h>
+#include "geometry_msgs/Point.h"
+#include "sicknav350/PointArray.h"
+#include <vector>
 
 #define DEG2RAD M_PI/180.0
+
+struct Point {
+  float x;
+  float y;
+};
+
+double vx = 0.0;
+double vy = 0.0;
+double vth = 0.0;
+
+namespace OperatingModes{
+	enum OperatingMode{
+		POWERDOWN = 0,
+		STANDBY = 1,
+		MAPPING = 2,
+		LANDMARK = 3,
+		NAVIGATION = 4,
+	};
+}
+typedef OperatingModes::OperatingMode OperatingMode;
+
+namespace ReflectorTypes{
+	enum ReflectorType{
+		FLAT = 1,
+		CYLINDRICAL = 2,
+	};
+}
+typedef ReflectorTypes::ReflectorType ReflectorType;
+
+namespace Users{
+	enum User{
+		OPERATOR = 2,
+		AUTHORIZED_CLIENT = 3,
+	};
+}
+typedef Users::User User;
 
 using namespace std;
 using namespace SickToolbox;
 
 void publish_scan(ros::Publisher *pub, double *range_values,
-                  uint32_t n_range_values, unsigned int *intensity_values,
-                   uint32_t n_intensity_values, ros::Time start,
-                  double scan_time, bool inverted, float angle_min,
-                  float angle_max, std::string frame_id,
-		unsigned int sector_start_timestamp)
+     uint32_t n_range_values, unsigned int *intensity_values,
+     uint32_t n_intensity_values, ros::Time start,
+     double scan_time, bool inverted, float angle_min,
+     float angle_max, std::string frame_id,
+		 unsigned int sector_start_timestamp)
 {
   static int scan_count = 0;
   sensor_msgs::LaserScan scan_msg;
@@ -59,60 +97,7 @@ void publish_scan(ros::Publisher *pub, double *range_values,
 
 }
 
-
-void PublishLaserTransform(tf::TransformBroadcaster laser_broadcaster,std::string header_frame_id,std::string child_frame_id)
-{
-
-	    laser_broadcaster.sendTransform(
-			    tf::StampedTransform(tf::Transform(tf::Quaternion(0, 0, 0, 1), tf::Vector3(0, 0, 0.2374)),
-			          ros::Time::now(),header_frame_id, child_frame_id)); // distance from the focal point of the scanner to its base (199.4mm) + offset from the mount (38mm)
-
-} //you can also define a customized urdf model using the nav350 meshes given
-
-
-//necessary for sensor fusion using robot_localization package
-void PublishLaserOdometry(double x,double y,double th,ros::Publisher *pub,std::string frame_id)
-{
-	ros::Time current_time;
-	current_time=ros::Time::now();
-	geometry_msgs::Quaternion odom_quat = tf::createQuaternionMsgFromYaw(th);
-	nav_msgs::Odometry odom;
-	    odom.header.stamp = current_time;
-	    odom.header.frame_id = frame_id;
-
-	    //set the position
-	    odom.pose.pose.position.x = x;
-	    odom.pose.pose.position.y = y;
-	    odom.pose.pose.position.z = 0;
-	    odom.pose.pose.orientation = odom_quat;
-
-		pub->publish(odom);
-
-}
-
-// position as tf 
-void PublishPositionTransform(double x,double y,double th,tf::TransformBroadcaster odom_broadcaster,std::string header_frame_id,std::string child_frame_id)
-{
-
-    ros::Time current_time;
-	current_time=ros::Time::now();
-    geometry_msgs::Quaternion odom_quat = tf::createQuaternionMsgFromYaw(th);
-    geometry_msgs::TransformStamped odom_trans;
-    odom_trans.header.stamp = current_time;
-    odom_trans.header.frame_id =header_frame_id;// "map"
-    odom_trans.child_frame_id = child_frame_id;// "reflector or base or odom frame"
-
-    odom_trans.transform.translation.x = x;//global x coordinate 
-    odom_trans.transform.translation.y = y; //global y coordinate 
-    odom_trans.transform.translation.z = 0; 
-    odom_trans.transform.rotation = odom_quat;
-
-    //send the transform
-    odom_broadcaster.sendTransform(odom_trans);
-}
-
 // odometry call back from the robot 
-double vx,vy,vth;
 void OdometryCallback(const nav_msgs::Odometry::ConstPtr& msg)
 {
 	vx=msg->twist.twist.linear.x;
@@ -128,7 +113,6 @@ int main(int argc, char *argv[]) {
     std::string odometry;
     std::string scan;
     bool inverted;
-    bool publish_tf_,publish_odom_,publish_scan_;
     int sick_motor_speed = 8;//10; // Hz
     double sick_step_angle = 1.5;//0.5;//0.25; 
     double active_sector_start_angle = 0;
@@ -139,12 +123,6 @@ int main(int argc, char *argv[]) {
 	nh_ns.param<std::string>("scan", scan, "scan");
 	ros::Publisher scan_pub = nh.advertise<sensor_msgs::LaserScan>(scan, 100);
 
-	ros::Publisher odom_pub = nh.advertise<nav_msgs::Odometry>("nav350laser/odom", 10);
-
-	nh_ns.param<bool>("publish_tf", publish_tf_, true);
-	nh_ns.param<bool>("publish_odom_", publish_odom_, true);
-	nh_ns.param<bool>("publish_scan", publish_scan_, true);
-
 	nh_ns.param("port", port, DEFAULT_SICK_TCP_PORT);
 	nh_ns.param("ipaddress", ipaddress, (std::string)DEFAULT_SICK_IP_ADDRESS);
 	nh_ns.param("inverted", inverted, false);
@@ -154,8 +132,9 @@ int main(int argc, char *argv[]) {
 	nh_ns.param<std::string>("laser_frame_id", laser_frame_id, "map"); //global cooridnate frame measurement for navigation and position based on reflectors
 	nh_ns.param<std::string>("laser_child_frame_id", laser_child_frame_id, "reflector");// a fixed frame eg: odom or base or reflector
 
-	ros::Subscriber sub = nh.subscribe("odometry/filtered", 10, OdometryCallback); // data from sensor fusion or wheel odometry of jackal robot
+	ros::Subscriber sub = nh.subscribe("odom", 10, OdometryCallback); // data from sensor fusion or wheel odometry of jackal robot
 
+  ros::Publisher pub = nh.advertise<sicknav350::PointArray>("reflectors",1);
 
 
     nh_ns.param("resolution", sick_step_angle, 1.0);
@@ -177,13 +156,23 @@ int main(int argc, char *argv[]) {
     SickNav350 sick_nav350(ipaddress.c_str(),port);
   //  ros::Duration(50).sleep(); //timedelay for jackal robot startup jobs
 double last_time_stamp=0;
+
     try {
         /* Initialize the device */
         sick_nav350.Initialize();
+        sick_nav350.SetAccessMode((int)Users::AUTHORIZED_CLIENT);
 
         try {
-		sick_nav350.SetOperatingMode(4);
-
+		        sick_nav350.SetOperatingMode((int)OperatingModes::STANDBY);
+            sick_nav350.SetCurrentLayer(1);
+            sick_nav350.SetPoseDataFormat(1,0);
+            sick_nav350.SetReflectorWindow(500,500,500,70000);
+            sick_nav350.SetActionRadius(400, 70000);
+            sick_nav350.SetReflectorSize(80);
+            sick_nav350.SetReflectorType((int)ReflectorTypes::FLAT);
+            sick_nav350.SetLandmarkMatching(0);
+            sick_nav350.SetOperatingMode((int)OperatingModes::NAVIGATION);
+            sick_nav350.SetPose(0,0,0);
         } catch (...) {
             ROS_ERROR("Configuration error");
             return -1;
@@ -191,13 +180,11 @@ double last_time_stamp=0;
 
         ros::Time last_start_scan_time;
         unsigned int last_sector_stop_timestamp = 0;
-	ros::Rate loop_rate(8);
-	tf::TransformBroadcaster odom_broadcaster;
-	tf::TransformBroadcaster laser_broadcaster;
+        ros::Rate loop_rate(8);
 
         while (ros::ok()) {
             /* Get the scan and landmark measurements */
-            sick_nav350.GetDataNavigation(1,1);
+            sick_nav350.GetDataNavigation(1,2);
             sick_nav350.GetSickMeasurements(range_values,
                                         &num_measurements,
                                         &sector_step_angle,
@@ -206,51 +193,60 @@ double last_time_stamp=0;
                                         &sector_start_timestamp,
                                         &sector_stop_timestamp
                                         );
-	double x1=(double) sick_nav350.PoseData_.x;
-	double y1=(double) sick_nav350.PoseData_.y;
-	double phi1=sick_nav350.PoseData_.phi;
-	double x2,y2;
-	double phi2=phi1-180000-1250-300;
-	phi2=phi2/1000*3.14159/180;
-	x2=x1-/*300*/529*cos(phi2);
-	y2=y1-/*300*/529*sin(phi2);
-	x2=x2/1000;
-	y2=y2/1000;
 
-	if(publish_tf_)
-	{
-//        	PublishPositionTransform(x2,y2,phi2,odom_broadcaster,laser_frame_id,laser_child_frame_id); //publish position data as transform in map frame 
-		PublishLaserTransform(laser_broadcaster,fixed_frame_id,frame_id); // publish laser transform with respect to base frame (scan data)
-	}
-	if(publish_odom_)
-		{
-	PublishLaserOdometry(x2,y2,phi2,&odom_pub,laser_frame_id); // publish odometry data from nav350 for sensor fusion
-		}
+  std::cout << "\n==============================" << std::endl;
+  std::cout << "Pose X : " << sick_nav350.PoseData_.x << std::endl;
+  std::cout << "Pose Y : " << sick_nav350.PoseData_.y << std::endl;
+  std::cout << "Pose phi : " << sick_nav350.PoseData_.phi << std::endl;
+
+  Point myarray[sick_nav350.ReflectorData_.num_reflector];
+  Point point;
+  sicknav350::PointArray pointarray;
+
+  for(int i = 0; i < sick_nav350.ReflectorData_.num_reflector; i++){
+    point.x = sick_nav350.ReflectorData_.x[i];
+    point.y = sick_nav350.ReflectorData_.y[i];
+    myarray[i] = point;
+  }
+
+  std::vector<Point> my_vector(myarray, myarray + sizeof(myarray) / sizeof(Point));
+
+  pointarray.points.clear();
+  pointarray.size = sick_nav350.ReflectorData_.num_reflector;
+
+  int i = 0;
+  for(std::vector<Point>::iterator it = my_vector.begin(); it != my_vector.end();  ++it){
+    geometry_msgs::Point point;
+    point.x = (*it).x;
+    point.y = (*it).y;
+    point.z = 0;
+    pointarray.points.push_back(point);
+    i++;
+  }
+  pub.publish(pointarray);
+
 	if (sector_start_timestamp<last_time_stamp)
 	{
-		loop_rate.sleep();
-		ros::spinOnce();
-		continue;
+      loop_rate.sleep();
+      ros::spinOnce();
+      continue;
 	}
 	last_time_stamp=sector_start_timestamp;
-            ros::Time end_scan_time = ros::Time::now();
+  ros::Time end_scan_time = ros::Time::now();
 
-            double scan_duration = 0.125;
+  double scan_duration = 0.125;
 
-            ros::Time start_scan_time = end_scan_time - ros::Duration(scan_duration);
-            sector_start_angle-=180;
-		sector_stop_angle-=180;
-		if(publish_scan_)
-				{
-            publish_scan(&scan_pub, range_values, num_measurements, intensity_values,
-                   num_measurements, start_scan_time, scan_duration, inverted,
+  ros::Time start_scan_time = end_scan_time - ros::Duration(scan_duration);
+  sector_start_angle-=180;
+  sector_stop_angle-=180;
+  publish_scan(&scan_pub, range_values, num_measurements, intensity_values,
+       num_measurements, start_scan_time, scan_duration, inverted,
                    (float)sector_start_angle, (float)sector_stop_angle, frame_id,sector_start_timestamp);
-				}
 
             last_start_scan_time = start_scan_time;
            last_sector_stop_timestamp = sector_stop_timestamp;
 
-           sick_nav350.SetSpeed(vx,vy,vth,sector_start_timestamp,0);
+       sick_nav350.SetSpeed(vx,vy,vth,sector_start_timestamp,0);
 
 		loop_rate.sleep();
 			ros::spinOnce();

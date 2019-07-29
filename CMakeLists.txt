@@ -6,8 +6,14 @@ find_package(catkin REQUIRED COMPONENTS roscpp std_msgs sensor_msgs nav_msgs geo
 ## System dependencies are found with CMake's conventions
 #find_package(Threads)
 
+add_message_files(
+  FILES
+  PointArray.msg
+)
+
 generate_messages(
    DEPENDENCIES
+   geometry_msgs
    std_msgs
 )
 ###################################
