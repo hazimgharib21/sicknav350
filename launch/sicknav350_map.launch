@@ -1,0 +1,4 @@
+<launch>
+   <node pkg="sicknav350" type="sicknav350_mapping" name="sicknav350_map" output="screen" >
+  </node>
+</launch>

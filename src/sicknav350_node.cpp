@@ -3,7 +3,7 @@
  *
  *  Created on: Aug 5, 2015
  *  Forked From : punithm/sicknav350
- *      Author: hazimgharib
+ *  Author: hazimgharib
  *
  * Based on the sicklms.cpp and sickld.cpp from the sicktoolbox_wrapper ROS package
  * and the sample code from the sicktoolbox manual.
@@ -20,6 +20,8 @@
 #include "geometry_msgs/Point.h"
 #include "sicknav350/PointArray.h"
 #include <vector>
+#include "std_msgs/String.h"
+#include <sstream>
 
 #define DEG2RAD M_PI/180.0
 
@@ -69,6 +71,7 @@ typedef Users::User User;
 using namespace std;
 using namespace SickToolbox;
 
+// Publish scan data
 void publish_scan(ros::Publisher *pub, double *range_values,
                   uint32_t n_range_values, unsigned int *intensity_values,
                   uint32_t n_intensity_values, ros::Time start,
@@ -80,6 +83,7 @@ void publish_scan(ros::Publisher *pub, double *range_values,
   sensor_msgs::LaserScan scan_msg;
   scan_msg.header.frame_id = frame_id;
   scan_count++;
+
   if (inverted)
   {
     scan_msg.angle_min = angle_max * DEG2RAD;
@@ -90,6 +94,7 @@ void publish_scan(ros::Publisher *pub, double *range_values,
     scan_msg.angle_min = angle_min * DEG2RAD;
     scan_msg.angle_max = angle_max * DEG2RAD;
   }
+
   scan_msg.angle_increment = (scan_msg.angle_max - scan_msg.angle_min) / (double)(n_range_values - 1);
   scan_msg.scan_time = 0.125;//scan_time 125ms;
   scan_msg.time_increment = scan_msg.scan_time / n_range_values;
@@ -97,15 +102,19 @@ void publish_scan(ros::Publisher *pub, double *range_values,
   scan_msg.range_max = 250.;
   scan_msg.ranges.resize(n_range_values);
   scan_msg.header.stamp = start;
+
   for (size_t i = 0; i < n_range_values; i++)
   {
     scan_msg.ranges[i] = (float)range_values[i] / 1000;
   }
+
   scan_msg.intensities.resize(n_intensity_values);
+
   for (size_t i = 0; i < n_intensity_values; i++)
   {
     scan_msg.intensities[i] = (float)intensity_values[i];
   }
+
   pub->publish(scan_msg);
 
 }
@@ -120,56 +129,69 @@ void OdometryCallback(const nav_msgs::Odometry::ConstPtr& msg)
 
 int main(int argc, char *argv[])
 {
+
   ros::init(argc, argv, "sicknav350");
+  ros::NodeHandle nh;
+  ros::NodeHandle nh_ns("~");
+
   int port;
+  bool inverted;
   std::string ipaddress;
   std::string frame_id, fixed_frame_id;
   std::string odometry;
   std::string scan;
-  bool inverted;
+  std::string laser_frame_id, laser_child_frame_id, odom_frame_id;
   int sick_motor_speed = 8;//10; // Hz
   double sick_step_angle = 1.5;//0.5;//0.25;
   double active_sector_start_angle = 0;
   double active_sector_stop_angle = 360;//269.75;
-  std::string laser_frame_id, laser_child_frame_id, odom_frame_id;
-  ros::NodeHandle nh;
-  ros::NodeHandle nh_ns("~");
-  nh_ns.param<std::string>("scan", scan, "scan");
-  ros::Publisher scan_pub = nh.advertise<sensor_msgs::LaserScan>(scan, 100);
 
   nh_ns.param("port", port, DEFAULT_SICK_TCP_PORT);
   nh_ns.param("ipaddress", ipaddress, (std::string)DEFAULT_SICK_IP_ADDRESS);
   nh_ns.param("inverted", inverted, false);
-  nh_ns.param<std::string>("frame_id", frame_id, "front_laser"); //laser frame for scan data
-  nh_ns.param<std::string>("fixed_frame_id", fixed_frame_id, "front_mount"); // nav350 mount position frame on the robot
-
-  nh_ns.param<std::string>("laser_frame_id", laser_frame_id, "map"); //global cooridnate frame measurement for navigation and position based on reflectors
-  nh_ns.param<std::string>("laser_child_frame_id", laser_child_frame_id, "reflector");// a fixed frame eg: odom or base or reflector
-
-  ros::Subscriber sub = nh.subscribe("odom", 10, OdometryCallback); // data from sensor fusion or wheel odometry of jackal robot
-
-  ros::Publisher pub = nh.advertise<sicknav350::PointArray>("reflectors", 1);
-
-
   nh_ns.param("resolution", sick_step_angle, 1.0);
   nh_ns.param("start_angle", active_sector_start_angle, 0.);
   nh_ns.param("stop_angle", active_sector_stop_angle, 360.);
   nh_ns.param("scan_rate", sick_motor_speed, 5);
+  nh_ns.param<std::string>("scan", scan, "scan");
+  nh_ns.param<std::string>("frame_id", frame_id, "front_laser"); //laser frame for scan data
+  nh_ns.param<std::string>("fixed_frame_id", fixed_frame_id, "front_mount"); // nav350 mount position frame on the robot
+  nh_ns.param<std::string>("laser_frame_id", laser_frame_id, "map"); //global cooridnate frame measurement for navigation and position based on reflectors
+  nh_ns.param<std::string>("laser_child_frame_id", laser_child_frame_id, "reflector");// a fixed frame eg: odom or base or reflector
 
-  /* Define buffers for return values */
+  // Robot odometry sub
+  ros::Subscriber sub = nh.subscribe("odom", 10, OdometryCallback);
+  // Robot scan data pub
+  ros::Publisher scan_pub = nh.advertise<sensor_msgs::LaserScan>(scan, 100);
+  // Reflectors data pub
+  ros::Publisher ref_pub = nh.advertise<sicknav350::PointArray>("reflectors", 1);
+  // sick sensor position data pub
+  ros::Publisher pos_pub = nh.advertise<geometry_msgs::Point>("sicknav350/pose", 1);
+  ros::Publisher mod_pub = nh.advertise<std_msgs::String>("sicknav350/pose_mode", 1);
+  ros::Publisher infostate_pub = nh.advertise<std_msgs::String>("sicknav350/pose_infostate", 1);
+  ros::Publisher accpos_pub = nh.advertise<geometry_msgs::Point>("sicknav350/acc_pose", 1);
+
+  // Define buffers for return values of scan data
   double range_values[SickNav350::SICK_MAX_NUM_MEASUREMENTS] = {0};
   unsigned int intensity_values[SickNav350::SICK_MAX_NUM_MEASUREMENTS] = {0};
-  /* Define buffers to hold sector specific data */
+
   unsigned int num_measurements = {0};
   unsigned int sector_start_timestamp = {0};
   unsigned int sector_stop_timestamp = {0};
+  unsigned int last_sector_stop_timestamp = 0;
   double sector_step_angle = {0};
   double sector_start_angle = {0};
   double sector_stop_angle = {0};
-  /* Instantiate the object */
-  SickNav350 sick_nav350(ipaddress.c_str(), port);
-  //  ros::Duration(50).sleep(); //timedelay for jackal robot startup jobs
   double last_time_stamp = 0;
+  double scan_duration = 0.125;
+  static geometry_msgs::Point acc_pose;
+  acc_pose.x = 0;
+  acc_pose.y = 0;
+  acc_pose.z = 0;
+  accpos_pub.publish(acc_pose);
+
+  // Instantiate sicknav350 object 
+  SickNav350 sick_nav350(ipaddress.c_str(), port);
 
   try
   {
@@ -190,20 +212,48 @@ int main(int argc, char *argv[])
       sick_nav350.SetLandmarkMatching(0);
       sick_nav350.SetOperatingMode((int)OperatingModes::NAVIGATION);
       sick_nav350.SetPose(0, 0, 0);
+
+      std::cout << "Filtering pose value..." << std::endl;
+      geometry_msgs::Point pose;
+      /*
+      for(int i = 0; i < 70; i++){
+        sick_nav350.GetDataNavigation(1, 2);
+        sick_nav350.GetSickMeasurementsWithRemission(range_values,intensity_values,
+                                        &num_measurements,
+                                        &sector_step_angle,
+                                        &sector_start_angle,
+                                        &sector_stop_angle,
+                                        &sector_start_timestamp,
+                                        &sector_stop_timestamp
+                                       );
+
+        pose.x = sick_nav350.PoseData_.x;
+        pose.y = sick_nav350.PoseData_.y;
+        pose.z = sick_nav350.PoseData_.phi;
+
+        acc_pose.x = pose.x;
+        acc_pose.y = pose.y;
+        acc_pose.z = pose.z;
+
+      
+      }
+      */
+
+     
     }
     catch (...)
     {
-      ROS_ERROR("Configuration error");
+      ROS_ERROR("SickNav350 Configuration error");
       return -1;
     }
 
     ros::Time last_start_scan_time;
-    unsigned int last_sector_stop_timestamp = 0;
     ros::Rate loop_rate(8);
 
+    int count = 0;
     while (ros::ok())
     {
-      /* Get the scan and landmark measurements */
+      // Get the scan and reflectors measurements
       sick_nav350.GetDataNavigation(1, 2);
       sick_nav350.GetSickMeasurementsWithRemission(range_values,intensity_values,
                                       &num_measurements,
@@ -214,11 +264,60 @@ int main(int argc, char *argv[])
                                       &sector_stop_timestamp
                                      );
 
-      std::cout << "\n==============================" << std::endl;
-      std::cout << "Pose X : " << sick_nav350.PoseData_.x << std::endl;
-      std::cout << "Pose Y : " << sick_nav350.PoseData_.y << std::endl;
-      std::cout << "Pose phi : " << sick_nav350.PoseData_.phi << std::endl;
+      int mode = sick_nav350.PoseData_.positionMode;
+      std_msgs::String msg;
+      std::stringstream ss;
+      
+      if(mode == 0){
+        ss << "Initial Positioning";
+      }else if(mode == 1){
+        ss << "Continuous Positioning";
+      }else if(mode == 2){
+        ss << "Virtual Positioning";
+      }else if(mode == 3){
+        ss << "Positioning Stopped";
+      }else if(mode == 4){
+        ss << "Position Invalid";
+      }else if(mode == 5){
+        ss << "External";
+      }
 
+      msg.data = ss.str();
+      mod_pub.publish(msg);
+      std::stringstream sss;
+      sss << sick_nav350.PoseData_.infoState;
+      msg.data = sss.str();
+      infostate_pub.publish(msg);
+
+
+      // Prepare pose data to publish
+      geometry_msgs::Point pose;
+
+      pose.x = sick_nav350.PoseData_.x;
+      pose.y = sick_nav350.PoseData_.y;
+      pose.z = sick_nav350.PoseData_.phi;
+
+      if(count > 50){
+        acc_pose.x += pose.x;
+        acc_pose.y += pose.y;
+        acc_pose.z += pose.z;
+      }else{
+      
+        count++;
+      }
+
+      std::cout << "------------------" << std::endl;
+      std::cout << pose.x << std::endl;
+      std::cout << pose.y << std::endl;
+      std::cout << pose.z << std::endl;
+      std::cout << acc_pose.x << std::endl;
+      std::cout << acc_pose.y << std::endl;
+      std::cout << acc_pose.z << std::endl;
+
+      pos_pub.publish(pose); 
+      accpos_pub.publish(acc_pose);
+
+      // Prepare reflector data to publish
       Point myarray[sick_nav350.ReflectorData_.num_reflector];
       Point point;
       sicknav350::PointArray pointarray;
@@ -239,24 +338,28 @@ int main(int argc, char *argv[])
       for (std::vector<Point>::iterator it = my_vector.begin(); it != my_vector.end();  ++it)
       {
         geometry_msgs::Point point;
-        point.x = (*it).x;
-        point.y = (*it).y;
+        point.x = (*it).x / 1000;
+        point.y = (*it).y / 1000;
         point.z = 0;
         pointarray.points.push_back(point);
         i++;
       }
-      pub.publish(pointarray);
 
+      ref_pub.publish(pointarray);
+
+
+      // Prepare scan data to publish
+      /*
       if (sector_start_timestamp < last_time_stamp)
       {
         loop_rate.sleep();
         ros::spinOnce();
         continue;
       }
+      */
+      
       last_time_stamp = sector_start_timestamp;
       ros::Time end_scan_time = ros::Time::now();
-
-      double scan_duration = 0.125;
 
       ros::Time start_scan_time = end_scan_time - ros::Duration(scan_duration);
       sector_start_angle -= 180;
@@ -268,6 +371,7 @@ int main(int argc, char *argv[])
       last_start_scan_time = start_scan_time;
       last_sector_stop_timestamp = sector_stop_timestamp;
 
+      // set speed of agv based on odometry value
       sick_nav350.SetSpeed(vx, vy, vth, sector_start_timestamp, 0);
 
       loop_rate.sleep();

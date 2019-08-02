@@ -42,6 +42,11 @@ include_directories(${catkin_INCLUDE_DIRS})
 add_executable(sicknav350_node src/sicknav350_node.cpp)
 target_link_libraries(sicknav350_node ${catkin_LIBRARIES})
 add_dependencies(sicknav350_node sicknav350_gencpp)
+
+add_executable(sicknav350_mapping src/sicknav350_mapping.cpp)
+target_link_libraries(sicknav350_mapping ${catkin_LIBRARIES})
+add_dependencies(sicknav350_mapping sicknav350_gencpp)
+
 #############
 ## Install ##
 #############
