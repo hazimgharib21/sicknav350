@@ -184,12 +184,8 @@ int main(int argc, char *argv[])
   double sector_stop_angle = {0};
   double last_time_stamp = 0;
   double scan_duration = 0.125;
-  static geometry_msgs::Point acc_pose;
-  acc_pose.x = 0;
-  acc_pose.y = 0;
-  acc_pose.z = 0;
-  accpos_pub.publish(acc_pose);
-
+  geometry_msgs::Point pose;
+  
   // Instantiate sicknav350 object 
   SickNav350 sick_nav350(ipaddress.c_str(), port);
 
@@ -212,33 +208,6 @@ int main(int argc, char *argv[])
       sick_nav350.SetLandmarkMatching(0);
       sick_nav350.SetOperatingMode((int)OperatingModes::NAVIGATION);
       sick_nav350.SetPose(0, 0, 0);
-
-      std::cout << "Filtering pose value..." << std::endl;
-      geometry_msgs::Point pose;
-      /*
-      for(int i = 0; i < 70; i++){
-        sick_nav350.GetDataNavigation(1, 2);
-        sick_nav350.GetSickMeasurementsWithRemission(range_values,intensity_values,
-                                        &num_measurements,
-                                        &sector_step_angle,
-                                        &sector_start_angle,
-                                        &sector_stop_angle,
-                                        &sector_start_timestamp,
-                                        &sector_stop_timestamp
-                                       );
-
-        pose.x = sick_nav350.PoseData_.x;
-        pose.y = sick_nav350.PoseData_.y;
-        pose.z = sick_nav350.PoseData_.phi;
-
-        acc_pose.x = pose.x;
-        acc_pose.y = pose.y;
-        acc_pose.z = pose.z;
-
-      
-      }
-      */
-
      
     }
     catch (...)
@@ -298,24 +267,12 @@ int main(int argc, char *argv[])
       pose.z = sick_nav350.PoseData_.phi;
 
       if(count > 50){
-        acc_pose.x += pose.x;
-        acc_pose.y += pose.y;
-        acc_pose.z += pose.z;
+
+        pos_pub.publish(pose); 
       }else{
       
         count++;
       }
-
-      std::cout << "------------------" << std::endl;
-      std::cout << pose.x << std::endl;
-      std::cout << pose.y << std::endl;
-      std::cout << pose.z << std::endl;
-      std::cout << acc_pose.x << std::endl;
-      std::cout << acc_pose.y << std::endl;
-      std::cout << acc_pose.z << std::endl;
-
-      pos_pub.publish(pose); 
-      accpos_pub.publish(acc_pose);
 
       // Prepare reflector data to publish
       Point myarray[sick_nav350.ReflectorData_.num_reflector];
@@ -338,8 +295,8 @@ int main(int argc, char *argv[])
       for (std::vector<Point>::iterator it = my_vector.begin(); it != my_vector.end();  ++it)
       {
         geometry_msgs::Point point;
-        point.x = (*it).x / 1000;
-        point.y = (*it).y / 1000;
+        point.x = ((*it).x / 1000) * -1;
+        point.y = ((*it).y / 1000) * -1;
         point.z = 0;
         pointarray.points.push_back(point);
         i++;
